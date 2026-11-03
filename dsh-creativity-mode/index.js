@@ -1,46 +1,49 @@
 /**
- * Creativity mode: a session-scoped "how to think" switch.
+ * Creativity mode: a session-scoped working-style switch.
  *
- * The user picks one of four modes; the mode is folded from the session log
+ * The user picks one of three modes. The mode is folded from the session log
  * (`command/run` + `command/done`, which every `/creativity` invocation and
- * every `set_creativity` tool call produces), exposed to the Client as the
- * `creativity` projection view, and rendered as an extra prompt section for
- * every model step while a non-default mode is active.
+ * every `set_creativity` tool call produces) and exposed to the Client as the
+ * `creativity` projection view.
+ *
+ * Delivery deliberately does NOT change the system prompt: every switch injects
+ * one short user-role "style notice" into the conversation, and the system
+ * prompt holds a single constant anchor that says the newest notice wins. An
+ * in-history model (`deepseek-flash`) appends a full system-prompt copy on
+ * every change, so switching through sections would cost ~1.7k tokens and leave
+ * stale copies behind; a notice costs ~50-250 tokens and leaves the system
+ * prompt byte-identical.
  *
  * Modes:
- * - `divergent` — novelty and breadth first: several genuinely different
- *   options, questioned assumptions, non-obvious proposals.
- * - `balanced` (default) — no extra guidance at all; the deployment prompt is
- *   untouched, so this mode costs no tokens.
- * - `strict` — minimal, exact, verifiable execution: no unrequested scope.
- * - `auto` — phase policy: starts divergent, and the first `write`/`edit` tool
- *   call flips the session to strict. Re-selecting `auto` restarts ideation.
+ * - `divergent` — novelty and breadth first; switches to edit discipline on its
+ *   own before the first write/edit.
+ * - `balanced` (default) — no special constraints; states that explicitly so a
+ *   switch back is never silent.
+ * - `faithful` — organize source material without added judgment.
  *
- * State lives in the log, so resume and fork restore the mode, and no new
- * event type is introduced (the command lifecycle already carries it; the auto
- * phase flip folds the model's own `tool/call` events).
+ * State lives in the log, so resume and fork restore the mode. The notice is a
+ * user message, so compaction can fold it away; a fresh notice is injected
+ * after `compaction/end` and when a session resumes with a non-default mode.
  *
  * @module @local/dsh-creativity-mode
  */
 
-/** Selectable modes, ordered from most divergent to most precise. */
-const MODES = Object.freeze(['divergent', 'balanced', 'strict', 'faithful', 'auto']);
+/** Selectable modes, ordered from most usable to most conservative. */
+const MODES = Object.freeze(['divergent', 'balanced', 'faithful']);
 /** Mode used when the session log carries no selection. */
 const DEFAULT_MODE = 'balanced';
 /** Projection key and its schema version. */
 const PROJECTION_KEY = 'creativity';
-const STATE_VERSION = 2;
+const STATE_VERSION = 3;
 /** Slash command that switches or reports the mode. */
 const COMMAND_NAME = 'creativity';
 /** Agent tool that switches the mode on a natural-language request. */
 const TOOL_NAME = 'set_creativity';
-/**
- * Tools whose first call ends the auto-mode idea phase.
- *
- * Only unambiguous file mutations count: a `bash` call may be a read, a test,
- * or a write, so it cannot serve as the boundary.
- */
-const MUTATING_TOOLS = Object.freeze(new Set(['write', 'edit']));
+/** Message-source kind marked on every injected style notice. */
+const NOTICE_KIND = 'creativity-mode';
+/** Constant system-prompt anchor name and order (after every tool section). */
+const ANCHOR_SECTION = 'creativity:anchor';
+const ANCHOR_ORDER = 9500;
 
 /** Accepted spellings, including Chinese terms, mapped to a canonical mode. */
 const ALIASES = new Map([
@@ -62,16 +65,6 @@ const ALIASES = new Map([
   ['平衡', 'balanced'],
   ['默认', 'balanced'],
   ['standard', 'balanced'],
-  ['strict', 'strict'],
-  ['precise', 'strict'],
-  ['precision', 'strict'],
-  ['exact', 'strict'],
-  ['execution', 'strict'],
-  ['execute', 'strict'],
-  ['严谨', 'strict'],
-  ['严格', 'strict'],
-  ['执行', 'strict'],
-  ['精确', 'strict'],
   ['faithful', 'faithful'],
   ['verbatim', 'faithful'],
   ['transcribe', 'faithful'],
@@ -81,46 +74,20 @@ const ALIASES = new Map([
   ['照录', 'faithful'],
   ['原文', 'faithful'],
   ['原样', 'faithful'],
-  ['auto', 'auto'],
-  ['automatic', 'auto'],
-  ['phase', 'auto'],
-  ['自动', 'auto'],
-  ['自适应', 'auto'],
-  ['自动切换', 'auto'],
 ]);
 
-/**
- * Model-facing guidance for one non-default effective level.
- *
- * Balanced deliberately has no entry: an empty section keeps the default
- * request byte-identical and avoids a permanent token cost.
- */
-const GUIDANCE = {
-  divergent: `## Session working style: creative (divergent)
-
-The user set this session to divergent mode. Optimize for originality and breadth before convention:
+/** Style rules carried by the notice of each non-default mode. */
+const RULES = {
+  divergent: `Optimize for originality and breadth before convention:
 
 - When asked for ideas, give several genuinely different directions (aim for 3-5), not variations of one answer.
-- Question the stated framing, surface non-obvious connections, and include at least one option a conventional answer would not contain.
+- Question the stated framing, and include at least one option a conventional answer would not contain.
 - Keep each idea concrete: say what it is, why it could work, and what it costs. Separate fact from speculation and label speculation.
 - Do not sand off unusual ideas to look safe; do not pad with generic filler.
-- Execution is still execution: when the user asks you to carry out a specific task, follow their explicit requirements and do not break working code. Creativity applies to what to build, not to ignoring constraints.
-- When the deliverable is a file (a document, a note, a summary to keep), write it and keep the chat reply to its path plus one line of what changed; do not restate the file's content in chat.
-- When the discussion converges and you are about to change files: in manual divergent mode call set_creativity with "strict" first; in auto mode the harness switches for you.`,
-  strict: `## Session working style: precise (strict)
-
-The user set this session to strict mode. Optimize for predictable, minimal, verifiable work:
-
-- Do exactly what was asked. Do not add unrequested features, files, refactors, renames, or stylistic changes.
-- When the deliverable is a file (a document, a note, a summary to keep), write it and keep the chat reply to its path plus one line of what changed; do not restate the file's content in chat.
-- Prefer the smallest correct change and follow the existing conventions of the codebase.
-- When requirements are ambiguous, state the assumption you are making in one line and proceed on the narrowest reading; ask only when the choice changes the outcome.
-- Verify in proportion to risk: run the check for code changes; for a document, read it once and stop instead of running code checks on prose.
-- Do not brainstorm alternatives unless the user asks for options; when a choice is unavoidable, take the conventional option and say why in one line.
-- If the user asks for fresh options or ideas rather than a fix, call set_creativity with "auto" (or "divergent") before proposing them.`,
-  faithful: `## Session working style: faithful (minimal editing)
-
-The user set this session to faithful mode: organize and format source material without adding your own judgment.
+- Before your first write or edit, switch to edit discipline: the smallest correct change, the existing conventions, no unrequested refactors or files, and verify what you changed.
+- Creativity applies to what to build, not to how you edit.
+- When the deliverable is a file, write it and keep the chat reply to its path plus one line of what changed; do not restate the file's content in chat.`,
+  faithful: `Organize and format source material without adding your own judgment:
 
 - Keep the source's order, structure, and wording. Do not merge, reorder, or re-level headings unless that exact transformation was requested.
 - Do not add conclusions, evaluations, takeaways, or summary paragraphs the source does not contain. Summarize only when the user asks for a summary.
@@ -131,38 +98,31 @@ The user set this session to faithful mode: organize and format source material 
 - When something is unclear, keep the ambiguity and annotate it; never guess.`,
 };
 
-/** Auto-mode note appended after the effective level's guidance. */
-const AUTO_IDEATE_NOTE = `### Auto mode — idea phase
-
-This session is in auto mode. Propose directions before implementation: describe the choices, their trade-offs, and what you would build. Do not call set_creativity for this transition: the harness switches this session to strict automatically when you first call the write or edit tool. If the user's request is already a concrete execution task with no design choice left, edit directly — that is the same transition.`;
-
-const AUTO_EXECUTE_NOTE = `### Auto mode — execution phase
-
-This session is in auto mode and has already moved from the idea phase to implementation (the first file edit did that). Continue under the strict guidance above. To explore again, the user re-selects Auto or Divergent.`;
-
-/** Whether a value is a canonical effective level (no `auto`). */
-function isLevel(value) {
-  return value === 'divergent' || value === 'balanced' || value === 'strict' || value === 'faithful';
-}
-
-/** Whether a value is a canonical selectable mode. */
-function isMode(value) {
-  return value === 'auto' || isLevel(value);
-}
-
-/** Whether a value is a valid auto phase. */
-function isPhase(value) {
-  return value === 'ideate' || value === 'execute';
+/** Notice text for one mode; balanced states its absence explicitly. */
+function noticeText(mode) {
+  if (mode === 'balanced') {
+    return 'Session style set by the user: balanced (default).\n\nNo special style constraints apply. Any earlier style instruction in this conversation is superseded.';
+  }
+  return `Session style set by the user: ${mode}.\n\n${RULES[mode] ?? ''}`.trim();
 }
 
 /**
- * The level whose guidance a state renders right now.
- * @param state - projection state.
- * @returns `divergent`, `balanced`, or `strict`.
+ * Build one injectable user-role style notice.
+ * @param mode - canonical mode the session switched to.
+ * @returns an inbox-ready user message.
  */
-function effectiveLevel(state) {
-  if (state.mode === 'auto') return state.phase === 'execute' ? 'strict' : 'divergent';
-  return isLevel(state.mode) ? state.mode : DEFAULT_MODE;
+function buildNotice(mode) {
+  return {
+    id: crypto.randomUUID(),
+    role: 'user',
+    content: [{ type: 'text', text: noticeText(mode) }],
+    source: { kind: NOTICE_KIND, form: 'notice', summary: `style: ${mode}` },
+  };
+}
+
+/** Whether a value is a canonical mode. */
+function isMode(value) {
+  return value === 'divergent' || value === 'balanced' || value === 'faithful';
 }
 
 /**
@@ -187,19 +147,16 @@ function stateSchema() {
       if (typeof value !== 'object' || value === null || Array.isArray(value)) {
         throw new Error('creativity projection state must be an object');
       }
-      const mode = value.mode;
-      if (!isMode(mode)) throw new Error('creativity projection mode is not a known mode');
-      const phase = value.phase;
-      if (!isPhase(phase)) throw new Error('creativity projection phase is not a known phase');
+      if (!isMode(value.mode)) throw new Error('creativity projection mode is not a known mode');
       const running = value.running;
-      if (running === null) return { mode, phase, running: null };
+      if (running === null) return { mode: value.mode, running: null };
       if (typeof running !== 'object' || running === null || Array.isArray(running)) {
         throw new Error('creativity projection running must be null or an object');
       }
       if (typeof running.commandId !== 'string' || !isMode(running.mode)) {
         throw new Error('creativity projection running must carry a commandId and a mode');
       }
-      return { mode, phase, running: { commandId: running.commandId, mode: running.mode } };
+      return { mode: value.mode, running: { commandId: running.commandId, mode: running.mode } };
     },
   };
 }
@@ -212,12 +169,7 @@ function viewSchema() {
         throw new Error('creativity view must be an object');
       }
       if (!isMode(value.mode)) throw new Error('creativity view mode is not a known mode');
-      if (!isLevel(value.level)) throw new Error('creativity view level is not a known level');
-      if (!isPhase(value.phase)) throw new Error('creativity view phase is not a known phase');
-      if (value.pending !== null && !isLevel(value.pending)) {
-        throw new Error('creativity view pending must be null or a known level');
-      }
-      return { mode: value.mode, level: value.level, phase: value.phase, pending: value.pending };
+      return { mode: value.mode };
     },
   };
 }
@@ -228,53 +180,39 @@ function projectionDefinition() {
     key: PROJECTION_KEY,
     stateVersion: STATE_VERSION,
     stateSchema: stateSchema(),
-    init: () => ({ mode: DEFAULT_MODE, phase: 'ideate', running: null }),
+    init: () => ({ mode: DEFAULT_MODE, running: null }),
     apply: (state, event) => {
       if (event.type === 'command/run') {
         if (event.data.name !== COMMAND_NAME) return state;
         const mode = normalizeMode(event.data.args);
         if (mode === undefined) return state;
         const selected = state.running === null ? state.mode : state.running.mode;
-        // Re-selecting auto restarts ideation even though the mode is unchanged.
-        if (mode === selected && !(mode === 'auto' && state.phase === 'execute')) return state;
+        if (mode === selected) return state;
         return {
           mode: state.mode,
-          phase: state.phase,
           running: { commandId: String(event.data.commandId), mode },
         };
       }
       if (event.type === 'command/done' && state.running !== null) {
         if (String(event.data.commandId) !== state.running.commandId) return state;
-        if (event.data.kind !== 'success') return { mode: state.mode, phase: state.phase, running: null };
-        return { mode: state.running.mode, phase: 'ideate', running: null };
-      }
-      if (event.type === 'tool/call') {
-        if (state.mode !== 'auto' || state.phase === 'execute') return state;
-        if (!MUTATING_TOOLS.has(event.data.name)) return state;
-        return { mode: state.mode, phase: 'execute', running: state.running };
+        if (event.data.kind !== 'success') return { mode: state.mode, running: null };
+        return { mode: state.running.mode, running: null };
       }
       return state;
     },
     wire: {
       viewSchema: viewSchema(),
-      view: (state) => ({
-        mode: state.mode,
-        level: effectiveLevel(state),
-        phase: state.phase,
-        pending: state.running === null ? null : state.running.mode,
-      }),
+      view: (state) => ({ mode: state.mode }),
     },
   };
 }
 
 /** Services this row registers against. */
-export const inject = ['systemPrompt', 'sessionProjections', 'commands', 'tools'];
-
-/** Prompt section name (unique in the prompt registry). */
-const SECTION_NAME = 'creativity:policy';
+export const inject = ['systemPrompt', 'sessionProjections', 'commands', 'tools', 'agents'];
 
 /**
- * Install the creativity switch: prompt section, projection, command, and tool.
+ * Install the creativity switch: constant prompt anchor, projection, notice
+ * injection, command, and tool.
  * @param ctx - hosting Cordis context.
  */
 export function apply(ctx) {
@@ -286,7 +224,7 @@ export function apply(ctx) {
     } catch {
       // Fall through to the default state.
     }
-    return { mode: DEFAULT_MODE, phase: 'ideate', running: null };
+    return { mode: DEFAULT_MODE, running: null };
   };
 
   ctx.effect(
@@ -294,39 +232,31 @@ export function apply(ctx) {
     'creativity-mode: projection',
   );
 
+  // A constant anchor: the rendered system prompt never depends on the mode, so
+  // switching never appends a system-prompt copy.
   ctx.effect(
     () =>
       ctx.systemPrompt.section({
-        name: SECTION_NAME,
-        order: ctx.systemPrompt.getSectionOrder('PLAN_POLICY') + 10,
-        text: (context) => {
-          const agent = context?.agent;
-          if (agent === undefined) return '';
-          const state = readState(agent.session);
-          const level = effectiveLevel(state);
-          const base = GUIDANCE[level] ?? '';
-          if (state.mode !== 'auto') return base;
-          return `${base}\n\n${state.phase === 'execute' ? AUTO_EXECUTE_NOTE : AUTO_IDEATE_NOTE}`;
-        },
+        name: ANCHOR_SECTION,
+        order: ANCHOR_ORDER,
+        text: '## Session working style\nThe current working style is declared in the most recent `creativity-mode` notice in this conversation. The newest notice supersedes every earlier one; if no notice exists, no extra style applies.',
       }),
-    'creativity-mode: prompt section',
+    'creativity-mode: anchor',
   );
 
   ctx.commands.register({
     definitionId: '@local/dsh-creativity-mode',
     name: COMMAND_NAME,
     description:
-      'Show or switch the session creativity mode (divergent | balanced | strict | faithful | auto)',
-    input: { hint: '[divergent|balanced|strict|faithful|auto]' },
+      'Show or switch the session creativity mode (divergent | balanced | faithful)',
+    input: { hint: '[divergent|balanced|faithful]' },
     handler: ({ agent, rawInput }) => {
       const raw = rawInput.trim();
       const state = readState(agent.session);
-      const level = effectiveLevel(state);
-      const where = state.mode === 'auto' ? `auto (currently ${level})` : level;
       if (raw === '' || raw === '?' || raw.toLowerCase() === 'status') {
         return {
           kind: 'success',
-          text: `Creativity mode: ${where}. Options: ${MODES.join(', ')}.`,
+          text: `Creativity mode: ${state.mode}. Options: ${MODES.join(', ')}.`,
         };
       }
       const mode = normalizeMode(raw);
@@ -336,25 +266,51 @@ export function apply(ctx) {
           text: `Unknown creativity mode "${raw}". Options: ${MODES.join(', ')}.`,
         };
       }
-      const restartAuto = mode === 'auto' && state.mode === 'auto' && state.phase === 'execute';
-      if (mode === state.mode && !restartAuto) {
+      if (mode === state.mode) {
         return {
           kind: 'success',
           text: `Creativity mode is already ${mode}.`,
         };
       }
-      const text =
-        mode === 'auto'
-          ? 'Creativity mode set to auto — divergent until the first file edit, then strict. Applies from the next model step.'
-          : `Creativity mode set to ${mode} — applies from the next model step.`;
-      return { kind: 'success', text };
+      agent.inject(buildNotice(mode));
+      return {
+        kind: 'success',
+        text: `Creativity mode set to ${mode} — a style notice was injected; it applies from the next model step.`,
+      };
     },
+  });
+
+  // Activation on a live profile does not re-create existing agents, so restate
+  // the mode of any live non-default session once when this row loads.
+  for (const agent of ctx.agents.list()) {
+    const state = readState(agent.session);
+    if (state.mode === DEFAULT_MODE) continue;
+    agent.inject(buildNotice(state.mode));
+  }
+
+  // Compaction folds the notice into its summary; restate the current mode so a
+  // long session does not silently fall back to the default.
+  ctx.on('session/event', (session, event) => {
+    if (event.type !== 'compaction/end' || event.data.error !== undefined) return;
+    const state = readState(session);
+    if (state.mode === DEFAULT_MODE) return;
+    const agent = ctx.agents.get(session.id);
+    if (agent === undefined) return;
+    agent.inject(buildNotice(state.mode));
+  });
+
+  // A resumed or forked session may have lost its notice to compaction; restate
+  // non-default modes when the agent is created.
+  ctx.on('agent/created', ({ agent }) => {
+    const state = readState(agent.session);
+    if (state.mode === DEFAULT_MODE) return;
+    agent.inject(buildNotice(state.mode));
   });
 
   ctx.tools.register({
     name: TOOL_NAME,
     description:
-      'Switch this session\'s creativity mode. Call it when the user asks for bolder, more original or more divergent ideas (`divergent`), for strict step-by-step minimal execution (`strict`), for faithful organizing and transcription of source material without added judgment (`faithful`), for the default (`balanced`), or for an automatic phase policy that starts divergent and turns strict at the first file edit (`auto`). The setting persists in the session and changes later steps, not the current reply.',
+      'Switch this session\'s creativity mode. Call it when the user asks for bolder, more original or more divergent ideas (`divergent`), for faithful organizing and transcription of source material without added judgment (`faithful`), or to return to the default (`balanced`). The setting persists in the session and changes later steps, not the current reply.',
     parameters: {
       type: 'object',
       properties: {
@@ -362,7 +318,7 @@ export function apply(ctx) {
           type: 'string',
           enum: MODES.slice(),
           description:
-            'divergent = originality and breadth; balanced = default; strict = minimal and exact; faithful = keep source order and wording, add no judgment or summary; auto = divergent first, strict after the first file edit.',
+            'divergent = originality and breadth, with edit discipline once files change; balanced = default; faithful = keep source order and wording, add no judgment or summary.',
         },
       },
       required: ['level'],
@@ -380,10 +336,7 @@ export function apply(ctx) {
       render: (_args, value) => [
         {
           type: 'text',
-          text:
-            value.level === 'auto'
-              ? 'Creativity mode is now auto: divergent until the first file edit, then strict. It applies from the next model step.'
-              : `Creativity mode is now ${value.level}. It applies from the next model step.`,
+          text: `Creativity mode is now ${value.level}. It applies from the next model step.`,
         },
       ],
     },

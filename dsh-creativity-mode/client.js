@@ -8,7 +8,7 @@ window.__ModuleLoader__.load({
     /** Locale namespace owned by this plugin (also the slot `locale`). */
     const NS = 'creativity';
     /** Selectable modes in display order. */
-    const MODES = ['divergent', 'balanced', 'strict', 'faithful', 'auto'];
+    const MODES = ['divergent', 'balanced', 'faithful'];
     const DEFAULT_MODE = 'balanced';
     /** Popup width in px; fixed so the anchor can be clamped before paint. */
     const MENU_WIDTH = 216;
@@ -18,15 +18,9 @@ window.__ModuleLoader__.load({
     const zh = {
       'level.divergent': '发散',
       'level.balanced': '平衡',
-      'level.strict': '严谨',
       'level.faithful': '忠实',
-      'level.auto': '自动',
-      'phase.ideate': '发散',
-      'phase.execute': '严谨',
       'chip.title': '创意程度：{level} — 点击选择档位',
-      'chip.title.auto': '自动：先发散，首次改文件后转严谨（当前：{phase}）— 点击选择',
       'chip.aria': '创意程度：{level}，打开选项',
-      'chip.aria.auto': '创意程度：自动，当前 {phase}，打开选项',
       'chip.failed': '切换失败',
       'chip.unknown': '未知指令：/creativity',
       'menu.label': '创意程度',
@@ -34,15 +28,9 @@ window.__ModuleLoader__.load({
     const en = {
       'level.divergent': 'Divergent',
       'level.balanced': 'Balanced',
-      'level.strict': 'Strict',
       'level.faithful': 'Faithful',
-      'level.auto': 'Auto',
-      'phase.ideate': 'Divergent',
-      'phase.execute': 'Strict',
       'chip.title': 'Creativity: {level} — click to choose a level',
-      'chip.title.auto': 'Auto: divergent first, strict after the first file edit (now: {phase}) — click to choose',
       'chip.aria': 'Creativity level: {level}, open options',
-      'chip.aria.auto': 'Creativity mode auto, now {phase}, open options',
       'chip.failed': 'Switch failed',
       'chip.unknown': 'Unknown command: /creativity',
       'menu.label': 'Creativity level',
@@ -107,9 +95,8 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * One mode glyph: spark for divergent, equals for balanced, target for
-     * strict, crossing arrows for auto. The check belongs to the menu's
-     * selected marker, so strict deliberately does not reuse a checkmark.
+     * One mode glyph: spark for divergent, equals for balanced, document sheet
+     * for faithful. The check belongs to the menu's selected marker.
      */
     function glyph(mode) {
       const shell = { viewBox: '0 0 24 24', width: '100%', height: '100%', 'aria-hidden': true, focusable: false };
@@ -121,21 +108,6 @@ window.__ModuleLoader__.load({
             d: 'M12 2.5l2.4 7.1 7.1 2.4-7.1 2.4L12 21.5l-2.4-7.1L2.5 12l7.1-2.4z',
             fill: 'currentColor',
           }),
-        );
-      }
-      if (mode === 'strict') {
-        return h(
-          'svg',
-          shell,
-          h('circle', {
-            cx: 12,
-            cy: 12,
-            r: 8,
-            fill: 'none',
-            stroke: 'currentColor',
-            strokeWidth: 2,
-          }),
-          h('circle', { cx: 12, cy: 12, r: 3, fill: 'currentColor' }),
         );
       }
       if (mode === 'faithful') {
@@ -151,23 +123,6 @@ window.__ModuleLoader__.load({
           shell,
           h('rect', { x: 5, y: 3.5, width: 14, height: 17, rx: 2, ...stroke }),
           h('path', { d: 'M8.5 8.5h7M8.5 12h7M8.5 15.5h4.5', ...stroke }),
-        );
-      }
-      if (mode === 'auto') {
-        const stroke = {
-          fill: 'none',
-          stroke: 'currentColor',
-          strokeWidth: 2,
-          strokeLinecap: 'round',
-          strokeLinejoin: 'round',
-        };
-        return h(
-          'svg',
-          shell,
-          h('path', { d: 'M4 8h3.5l9 8H20', ...stroke }),
-          h('path', { d: 'M17 5l3 3-3 3', ...stroke }),
-          h('path', { d: 'M4 16h3.5l9-8H20', ...stroke }),
-          h('path', { d: 'M17 13l3 3-3 3', ...stroke }),
         );
       }
       return h(
@@ -226,10 +181,9 @@ window.__ModuleLoader__.load({
         const t = ctx.locale.bind(NS);
 
         /**
-         * Composer control: a trigger that opens the level card above itself,
-         * like the permission selector. The current level is read from the
-         * Host-folded `creativity` projection, so a click and a slash command
-         * always agree.
+         * Composer control: a trigger that opens the mode card above itself,
+         * like the permission selector. The mode is read from the Host-folded
+         * `creativity` projection, so a click and a slash command always agree.
          */
         function CreativityControl({ useProjection, sessionId }) {
           const view = useProjection('creativity');
@@ -252,8 +206,6 @@ window.__ModuleLoader__.load({
             view !== undefined && view !== null && typeof view.mode === 'string'
               ? view.mode
               : DEFAULT_MODE;
-          const phase =
-            view !== undefined && view !== null && view.phase === 'execute' ? 'execute' : 'ideate';
 
           /** Anchor the card above the trigger, clamped into the viewport. */
           const place = React.useCallback(() => {
@@ -333,9 +285,7 @@ window.__ModuleLoader__.load({
           const choose = (next) => {
             setOpen(false);
             triggerRef.current?.focus();
-            if (busy) return;
-            const restart = next === 'auto' && mode === 'auto' && phase === 'execute';
-            if (next === mode && !restart) return;
+            if (busy || next === mode) return;
             setBusy(true);
             setFailure(null);
             ctx.remote.commands.execute(sessionId, '/creativity ' + next, []).then(
@@ -384,15 +334,6 @@ window.__ModuleLoader__.load({
           };
 
           const label = t('level.' + mode);
-          const phaseLabel = t('phase.' + phase);
-          const title =
-            mode === 'auto'
-              ? t('chip.title.auto', { phase: phaseLabel })
-              : t('chip.title', { level: label });
-          const aria =
-            mode === 'auto'
-              ? t('chip.aria.auto', { phase: phaseLabel })
-              : t('chip.aria', { level: label });
 
           return h(
             'span',
@@ -406,8 +347,8 @@ window.__ModuleLoader__.load({
                 'data-level': mode,
                 'aria-haspopup': 'menu',
                 'aria-expanded': open ? 'true' : 'false',
-                'aria-label': aria,
-                title,
+                'aria-label': t('chip.aria', { level: label }),
+                title: t('chip.title', { level: label }),
                 disabled: busy,
                 onClick: toggle,
               },
@@ -472,7 +413,7 @@ window.__ModuleLoader__.load({
             {
               name: 'conversation.input.left',
               id: 'creativity',
-              order: 22,
+              order: 23,
               locale: NS,
             },
             CreativityControl,
