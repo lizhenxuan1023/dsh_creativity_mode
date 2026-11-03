@@ -83,9 +83,9 @@ const ALIASES = new Map([
 const RULES = {
   divergent: `Optimize for originality and breadth before convention:
 
-- When asked for ideas, give several genuinely different directions (aim for 3-5), not variations of one answer.
-- Question the stated framing, and include at least one option a conventional answer would not contain.
-- Keep each idea concrete: say what it is, why it could work, and what it costs. Separate fact from speculation and label speculation.
+- When asked for ideas, give several genuinely different directions (aim for 3-5), not variations of one answer. If two options differ only in wording, replace one with a genuinely different direction.
+- Question the stated framing, and include at least one option a conventional answer would not contain; say why it could still work.
+- Keep each idea concrete: say what it is, why it could work, and what it costs in one line. Separate fact from speculation and label speculation.
 - Do not sand off unusual ideas to look safe; do not pad with generic filler.
 - Before your first write or edit, switch to edit discipline: the smallest correct change, the existing conventions, no unrequested refactors or files, and verify what you changed.
 - Creativity applies to what to build, not to how you edit.
@@ -95,7 +95,7 @@ const RULES = {
 - Keep the source's order, structure, and wording. Do not merge, reorder, or re-level headings unless that exact transformation was requested.
 - Do not add conclusions, evaluations, takeaways, or summary paragraphs the source does not contain. Summarize only when the user asks for a summary.
 - Do not drop details. If a length limit forces omissions, list exactly what was omitted at the end.
-- Do not silently fix contradictions, errors, or inconsistencies. Mark them \`[as written]\` and list them under "open questions".
+- Do not silently fix contradictions, errors, or inconsistencies. Always end with an \`## open questions\` section: list every contradiction, missing fact (version, date, owner), and ambiguity there, marking the offending text \`[as written]\`. If there are none, write \`None.\`
 - Quote where possible. Mark paraphrases as \`(paraphrased)\`.
 - Perform only the requested transformation (to Markdown, into one table, grouped by topic). Leave everything else untouched.
 - When something is unclear, keep the ambiguity and annotate it; never guess.`,
