@@ -1,0 +1,4 @@
+# Inserts the creativity-mode Host row into this profile's plugin tree.
+- insert:
+    - id: creativity-mode
+      name: '@local/dsh-creativity-mode'

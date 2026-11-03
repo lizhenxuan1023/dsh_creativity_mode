@@ -1,0 +1,7 @@
+#!/bin/sh
+# pnpm launcher for processes whose PATH does not include the nvm Node install
+# (for example a desktop-launched DeepSeek Harness). Keeps the plugin manager's
+# pnpmCommand configurable without changing the host process environment.
+NODE_BIN=/home/lzx/.nvm/versions/node/v22.23.2/bin
+export PATH="$NODE_BIN:$PATH"
+exec "$NODE_BIN/node" /home/lzx/.nvm/versions/node/v22.23.2/lib/node_modules/corepack/dist/pnpm.js "$@"
