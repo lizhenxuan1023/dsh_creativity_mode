@@ -38,7 +38,8 @@
 
 已知边界：
 
-- notice 是一条 user 消息，会出现在对话里（与 plan mode 的 notice 同类）。
+- notice 是一条 user 消息，但 UI 用主机的 context 折叠行渲染：标签 `style` + 摘要 `Divergent/Balanced/Faithful`，
+  默认收起，展开才看到完整规则。
 - 它属于用户级指令，压不住系统级规则；对风格控制够用。
 - 旧版本留在历史里的系统提示词副本不会因为本插件而消失（那是模型能力决定的，只能靠压缩或新会话清理）。
 

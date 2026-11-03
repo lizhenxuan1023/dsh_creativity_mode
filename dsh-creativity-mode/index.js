@@ -40,7 +40,7 @@ const COMMAND_NAME = 'creativity';
 /** Agent tool that switches the mode on a natural-language request. */
 const TOOL_NAME = 'set_creativity';
 /** Message-source kind marked on every injected style notice. */
-const NOTICE_KIND = 'creativity-mode';
+const NOTICE_KIND = 'style';
 /** Constant system-prompt anchor name and order (after every tool section). */
 const ANCHOR_SECTION = 'creativity:anchor';
 const ANCHOR_ORDER = 9500;
@@ -106,6 +106,13 @@ function noticeText(mode) {
   return `Session style set by the user: ${mode}.\n\n${RULES[mode] ?? ''}`.trim();
 }
 
+/** Collapsed-row summary the Chat UI shows for each notice (language-neutral). */
+const NOTICE_SUMMARY = Object.freeze({
+  divergent: 'Divergent',
+  balanced: 'Balanced',
+  faithful: 'Faithful',
+});
+
 /**
  * Build one injectable user-role style notice.
  * @param mode - canonical mode the session switched to.
@@ -116,7 +123,7 @@ function buildNotice(mode) {
     id: crypto.randomUUID(),
     role: 'user',
     content: [{ type: 'text', text: noticeText(mode) }],
-    source: { kind: NOTICE_KIND, form: 'notice', summary: `style: ${mode}` },
+    source: { kind: NOTICE_KIND, form: 'notice', summary: NOTICE_SUMMARY[mode] ?? mode },
   };
 }
 
@@ -239,7 +246,7 @@ export function apply(ctx) {
       ctx.systemPrompt.section({
         name: ANCHOR_SECTION,
         order: ANCHOR_ORDER,
-        text: '## Session working style\nThe current working style is declared in the most recent `creativity-mode` notice in this conversation. The newest notice supersedes every earlier one; if no notice exists, no extra style applies.',
+        text: '## Session working style\nThe current working style is declared in the most recent `style` notice in this conversation. The newest notice supersedes every earlier one; if no notice exists, no extra style applies.',
       }),
     'creativity-mode: anchor',
   );
