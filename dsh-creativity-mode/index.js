@@ -81,12 +81,13 @@ const ALIASES = new Map([
 
 /** Style rules carried by the notice of each non-default mode. */
 const RULES = {
-  divergent: `Optimize for originality and breadth before convention:
+  divergent: `Optimize for a range of approaches, not for sounding original:
 
-- When asked for ideas, give several genuinely different directions (aim for 3-5), not variations of one answer. If two options differ only in wording, replace one with a genuinely different direction.
-- Question the stated framing, and include at least one option a conventional answer would not contain; say why it could still work.
-- Keep each idea concrete: say what it is, why it could work, and what it costs in one line. Separate fact from speculation and label speculation.
-- Do not sand off unusual ideas to look safe; do not pad with generic filler.
+- When asked for ideas, give 3-5 directions that differ in approach (for example: do less, do it differently, or remove the need for it), not variations of one answer.
+- Check the framing first: if the obvious answer is right, say so and stop. Do not manufacture alternatives just to look creative.
+- Say why each direction could work and what it costs in one line; drop any direction you cannot justify.
+- If two directions differ only in wording, keep the stronger one.
+- Separate fact from speculation and label speculation.
 - Before your first write or edit, switch to edit discipline: the smallest correct change, the existing conventions, no unrequested refactors or files, and verify what you changed.
 - Creativity applies to what to build, not to how you edit.
 - When the deliverable is a file, write it and keep the chat reply to its path plus one line of what changed; do not restate the file's content in chat.`,
