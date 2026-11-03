@@ -24,7 +24,7 @@
  */
 
 /** Selectable modes, ordered from most divergent to most precise. */
-const MODES = Object.freeze(['divergent', 'balanced', 'strict', 'auto']);
+const MODES = Object.freeze(['divergent', 'balanced', 'strict', 'faithful', 'auto']);
 /** Mode used when the session log carries no selection. */
 const DEFAULT_MODE = 'balanced';
 /** Projection key and its schema version. */
@@ -72,6 +72,15 @@ const ALIASES = new Map([
   ['严格', 'strict'],
   ['执行', 'strict'],
   ['精确', 'strict'],
+  ['faithful', 'faithful'],
+  ['verbatim', 'faithful'],
+  ['transcribe', 'faithful'],
+  ['fidelity', 'faithful'],
+  ['忠实', 'faithful'],
+  ['忠实整理', 'faithful'],
+  ['照录', 'faithful'],
+  ['原文', 'faithful'],
+  ['原样', 'faithful'],
   ['auto', 'auto'],
   ['automatic', 'auto'],
   ['phase', 'auto'],
@@ -109,6 +118,17 @@ The user set this session to strict mode. Optimize for predictable, minimal, ver
 - Verify in proportion to risk: run the check for code changes; for a document, read it once and stop instead of running code checks on prose.
 - Do not brainstorm alternatives unless the user asks for options; when a choice is unavoidable, take the conventional option and say why in one line.
 - If the user asks for fresh options or ideas rather than a fix, call set_creativity with "auto" (or "divergent") before proposing them.`,
+  faithful: `## Session working style: faithful (minimal editing)
+
+The user set this session to faithful mode: organize and format source material without adding your own judgment.
+
+- Keep the source's order, structure, and wording. Do not merge, reorder, or re-level headings unless that exact transformation was requested.
+- Do not add conclusions, evaluations, takeaways, or summary paragraphs the source does not contain. Summarize only when the user asks for a summary.
+- Do not drop details. If a length limit forces omissions, list exactly what was omitted at the end.
+- Do not silently fix contradictions, errors, or inconsistencies. Mark them \`[as written]\` and list them under "open questions".
+- Quote where possible. Mark paraphrases as \`(paraphrased)\`.
+- Perform only the requested transformation (to Markdown, into one table, grouped by topic). Leave everything else untouched.
+- When something is unclear, keep the ambiguity and annotate it; never guess.`,
 };
 
 /** Auto-mode note appended after the effective level's guidance. */
@@ -122,7 +142,7 @@ This session is in auto mode and has already moved from the idea phase to implem
 
 /** Whether a value is a canonical effective level (no `auto`). */
 function isLevel(value) {
-  return value === 'divergent' || value === 'balanced' || value === 'strict';
+  return value === 'divergent' || value === 'balanced' || value === 'strict' || value === 'faithful';
 }
 
 /** Whether a value is a canonical selectable mode. */
@@ -296,8 +316,8 @@ export function apply(ctx) {
     definitionId: '@local/dsh-creativity-mode',
     name: COMMAND_NAME,
     description:
-      'Show or switch the session creativity mode (divergent | balanced | strict | auto)',
-    input: { hint: '[divergent|balanced|strict|auto]' },
+      'Show or switch the session creativity mode (divergent | balanced | strict | faithful | auto)',
+    input: { hint: '[divergent|balanced|strict|faithful|auto]' },
     handler: ({ agent, rawInput }) => {
       const raw = rawInput.trim();
       const state = readState(agent.session);
@@ -334,7 +354,7 @@ export function apply(ctx) {
   ctx.tools.register({
     name: TOOL_NAME,
     description:
-      'Switch this session\'s creativity mode. Call it when the user asks for bolder, more original or more divergent ideas (`divergent`), for strict step-by-step minimal execution (`strict`), for the default (`balanced`), or for an automatic phase policy that starts divergent and turns strict at the first file edit (`auto`). The setting persists in the session and changes later steps, not the current reply.',
+      'Switch this session\'s creativity mode. Call it when the user asks for bolder, more original or more divergent ideas (`divergent`), for strict step-by-step minimal execution (`strict`), for faithful organizing and transcription of source material without added judgment (`faithful`), for the default (`balanced`), or for an automatic phase policy that starts divergent and turns strict at the first file edit (`auto`). The setting persists in the session and changes later steps, not the current reply.',
     parameters: {
       type: 'object',
       properties: {
@@ -342,7 +362,7 @@ export function apply(ctx) {
           type: 'string',
           enum: MODES.slice(),
           description:
-            'divergent = originality and breadth; balanced = default; strict = minimal and exact; auto = divergent first, strict after the first file edit.',
+            'divergent = originality and breadth; balanced = default; strict = minimal and exact; faithful = keep source order and wording, add no judgment or summary; auto = divergent first, strict after the first file edit.',
         },
       },
       required: ['level'],
