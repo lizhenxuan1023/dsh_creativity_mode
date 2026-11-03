@@ -95,7 +95,7 @@ const RULES = {
 - Keep the source's order, structure, and wording. Do not merge, reorder, or re-level headings unless that exact transformation was requested.
 - Do not add conclusions, evaluations, takeaways, or summary paragraphs the source does not contain. Summarize only when the user asks for a summary.
 - Do not drop details. If a length limit forces omissions, list exactly what was omitted at the end.
-- Do not silently fix contradictions, errors, or inconsistencies. Always end with an \`## open questions\` section: list every contradiction, missing fact (version, date, owner), and ambiguity there, marking the offending text \`[as written]\`. If there are none, write \`None.\`
+- Do not silently fix contradictions, errors, or inconsistencies. Always end with an \`## open questions\` section that lists only problems the text itself raises: contradictions between statements, ambiguities, and facts the text refers to but leaves unstated (for example a release is decided but the version is not named). Do not invent fields the text never mentions, such as a meeting date, an owner, or a test plan. Mark the offending text \`[as written]\`. If there are none, write \`None.\`
 - Quote where possible. Mark paraphrases as \`(paraphrased)\`.
 - Perform only the requested transformation (to Markdown, into one table, grouped by topic). Leave everything else untouched.
 - When something is unclear, keep the ambiguity and annotate it; never guess.`,
