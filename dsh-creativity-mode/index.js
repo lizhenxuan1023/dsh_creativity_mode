@@ -21,9 +21,12 @@
  *   switch back is never silent.
  * - `faithful` — organize source material without added judgment.
  *
- * State lives in the log, so resume and fork restore the mode. The notice is a
- * user message, so compaction can fold it away; a fresh notice is injected
- * after `compaction/end` and when a session resumes with a non-default mode.
+ * State lives in the log, so resume and fork restore the mode. The notice is
+ * restated lazily at the next step boundary, and only when the conversation has
+ * not already been told this mode; switching back and forth before a step
+ * therefore produces one notice, not one per click. Compaction folds the notice
+ * away, so the projection forgets the announcement and the next step restates
+ * it.
  *
  * @module @local/dsh-creativity-mode
  */
@@ -34,7 +37,7 @@ const MODES = Object.freeze(['divergent', 'balanced', 'faithful']);
 const DEFAULT_MODE = 'balanced';
 /** Projection key and its schema version. */
 const PROJECTION_KEY = 'creativity';
-const STATE_VERSION = 3;
+const STATE_VERSION = 4;
 /** Slash command that switches or reports the mode. */
 const COMMAND_NAME = 'creativity';
 /** Agent tool that switches the mode on a natural-language request. */
@@ -123,7 +126,12 @@ function buildNotice(mode) {
     id: crypto.randomUUID(),
     role: 'user',
     content: [{ type: 'text', text: noticeText(mode) }],
-    source: { kind: NOTICE_KIND, form: 'notice', summary: NOTICE_SUMMARY[mode] ?? mode },
+    source: {
+      kind: NOTICE_KIND,
+      form: 'notice',
+      summary: NOTICE_SUMMARY[mode] ?? mode,
+      mode,
+    },
   };
 }
 
@@ -155,15 +163,23 @@ function stateSchema() {
         throw new Error('creativity projection state must be an object');
       }
       if (!isMode(value.mode)) throw new Error('creativity projection mode is not a known mode');
+      const announced = value.announced;
+      if (announced !== null && !isMode(announced)) {
+        throw new Error('creativity projection announced must be null or a known mode');
+      }
       const running = value.running;
-      if (running === null) return { mode: value.mode, running: null };
+      if (running === null) return { mode: value.mode, announced, running: null };
       if (typeof running !== 'object' || running === null || Array.isArray(running)) {
         throw new Error('creativity projection running must be null or an object');
       }
       if (typeof running.commandId !== 'string' || !isMode(running.mode)) {
         throw new Error('creativity projection running must carry a commandId and a mode');
       }
-      return { mode: value.mode, running: { commandId: running.commandId, mode: running.mode } };
+      return {
+        mode: value.mode,
+        announced,
+        running: { commandId: running.commandId, mode: running.mode },
+      };
     },
   };
 }
@@ -187,7 +203,7 @@ function projectionDefinition() {
     key: PROJECTION_KEY,
     stateVersion: STATE_VERSION,
     stateSchema: stateSchema(),
-    init: () => ({ mode: DEFAULT_MODE, running: null }),
+    init: () => ({ mode: DEFAULT_MODE, announced: DEFAULT_MODE, running: null }),
     apply: (state, event) => {
       if (event.type === 'command/run') {
         if (event.data.name !== COMMAND_NAME) return state;
@@ -196,15 +212,26 @@ function projectionDefinition() {
         const selected = state.running === null ? state.mode : state.running.mode;
         if (mode === selected) return state;
         return {
-          mode: state.mode,
+          ...state,
           running: { commandId: String(event.data.commandId), mode },
         };
       }
       if (event.type === 'command/done' && state.running !== null) {
         if (String(event.data.commandId) !== state.running.commandId) return state;
-        if (event.data.kind !== 'success') return { mode: state.mode, running: null };
-        return { mode: state.running.mode, running: null };
+        if (event.data.kind !== 'success') return { ...state, running: null };
+        return { ...state, mode: state.running.mode, running: null };
       }
+      // A style notice restates what the conversation has already been told;
+      // compaction drops the notice from the visible history, so announced goes
+      // back to null and the next step re-injects it.
+      if (event.type === 'user/message') {
+        const source = event.data.source;
+        if (source !== undefined && source.kind === NOTICE_KIND && isMode(source.mode)) {
+          return { ...state, announced: source.mode };
+        }
+        return state;
+      }
+      if (event.type === 'compaction/end') return { ...state, announced: null };
       return state;
     },
     wire: {
@@ -215,7 +242,7 @@ function projectionDefinition() {
 }
 
 /** Services this row registers against. */
-export const inject = ['systemPrompt', 'sessionProjections', 'commands', 'tools', 'agents'];
+export const inject = ['systemPrompt', 'sessionProjections', 'commands', 'tools'];
 
 /**
  * Install the creativity switch: constant prompt anchor, projection, notice
@@ -279,39 +306,23 @@ export function apply(ctx) {
           text: `Creativity mode is already ${mode}.`,
         };
       }
-      agent.inject(buildNotice(mode));
       return {
         kind: 'success',
-        text: `Creativity mode set to ${mode} — a style notice was injected; it applies from the next model step.`,
+        text: `Creativity mode set to ${mode} — the next model step restates it in the conversation.`,
       };
     },
   });
 
-  // Activation on a live profile does not re-create existing agents, so restate
-  // the mode of any live non-default session once when this row loads.
-  for (const agent of ctx.agents.list()) {
+  // Restate the mode lazily, at the next step boundary, and only when the
+  // conversation has not already been told this mode. Switching back and forth
+  // before the next step therefore produces one notice, not one per click.
+  ctx.on('agent/pre-step', async ({ agent }, next) => {
+    const decision = await next();
+    if (decision.kind === 'reject') return decision;
     const state = readState(agent.session);
-    if (state.mode === DEFAULT_MODE) continue;
-    agent.inject(buildNotice(state.mode));
-  }
-
-  // Compaction folds the notice into its summary; restate the current mode so a
-  // long session does not silently fall back to the default.
-  ctx.on('session/event', (session, event) => {
-    if (event.type !== 'compaction/end' || event.data.error !== undefined) return;
-    const state = readState(session);
-    if (state.mode === DEFAULT_MODE) return;
-    const agent = ctx.agents.get(session.id);
-    if (agent === undefined) return;
-    agent.inject(buildNotice(state.mode));
-  });
-
-  // A resumed or forked session may have lost its notice to compaction; restate
-  // non-default modes when the agent is created.
-  ctx.on('agent/created', ({ agent }) => {
-    const state = readState(agent.session);
-    if (state.mode === DEFAULT_MODE) return;
-    agent.inject(buildNotice(state.mode));
+    if (state.mode === state.announced) return decision;
+    if (state.mode === DEFAULT_MODE && state.announced === null) return decision;
+    return { ...decision, messages: [...decision.messages, buildNotice(state.mode)] };
   });
 
   ctx.tools.register({

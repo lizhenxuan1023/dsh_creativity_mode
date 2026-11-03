@@ -29,12 +29,12 @@
 
 - 系统提示词里只放一段**永不变化**的锚：当前风格以对话中最近一条 `creativity-mode` notice 为准，
   新的覆盖旧的。
-- 每次切换，注入一条很短的 user notice（balanced ≈ 50 token，divergent/faithful ≈ 250 token）。
+- 切换本身只改投影；**下一步开始时**才决定要不要补一条 notice：当前档位和「上一次已经说过的档位」
+  相同就什么都不做，不同才注入（balanced ≈ 50 token，divergent/faithful ≈ 250 token）。
 - 这样切换**不会**产生系统提示词副本。这一点很关键：`deepseek-flash` 声明了
   `systemPromptUpdate: in-history`，每次系统提示词变化都会**追加一整份**（约 1.7k token），
   旧版本还会留在历史里；频繁切换会把上下文撑大。notice 方式把每次切换的成本降到几十分之一。
-- 压缩（compaction）可能把 notice 折进摘要，所以 `compaction/end` 之后、以及恢复会话时，
-  会对非 balanced 档补注一条。
+- 压缩会把 notice 折进摘要，所以投影在 `compaction/end` 时忘掉「已说过」的记录，下一步自动补一条。
 
 已知边界：
 
@@ -48,9 +48,10 @@
 - **Host**（`index.js`）
   - `sessionProjections` 注册 `creativity` 投影：折叠 `command/run` → `command/done`，成功后才提交。
   - `systemPrompt.section('creativity:anchor')`：order 9500，位于所有工具段之后，文本恒定。
-  - `commands.register('creativity')`：唯一的业务入口；切换时 `agent.inject` 注入 notice。
+  - `commands.register('creativity')`：唯一的业务入口，只提交档位。
   - `tools.register('set_creativity')`：自然语言入口，内部调用同一个命令。
-  - `session/event` 监听 `compaction/end`、`agent/created`：为非 balanced 档补注 notice。
+  - `agent/pre-step`：当 `mode !== announced` 时，把 notice 追加进本步消息；否则不动。
+  - 投影额外折叠 `user/message`（`source.kind = style` → 记录 `announced`）与 `compaction/end`（清空 `announced`）。
 - **Client**（`client.js`）
   - 注册到 `conversation.input.left`（`id: creativity`，`order: 23`），读取投影里的 `mode`。
   - 点击调用 `ctx.remote.commands.execute(sessionId, '/creativity <mode>', [])`。
