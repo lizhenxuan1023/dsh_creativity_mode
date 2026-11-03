@@ -96,6 +96,7 @@ The user set this session to divergent mode. Optimize for originality and breadt
 - Keep each idea concrete: say what it is, why it could work, and what it costs. Separate fact from speculation and label speculation.
 - Do not sand off unusual ideas to look safe; do not pad with generic filler.
 - Execution is still execution: when the user asks you to carry out a specific task, follow their explicit requirements and do not break working code. Creativity applies to what to build, not to ignoring constraints.
+- When the deliverable is a file (a document, a note, a summary to keep), write it and keep the chat reply to its path plus one line of what changed; do not restate the file's content in chat.
 - When the discussion converges and you are about to change files: in manual divergent mode call set_creativity with "strict" first; in auto mode the harness switches for you.`,
   strict: `## Session working style: precise (strict)
 
